@@ -1,45 +1,71 @@
 # coffee-editor-deployment
+
 Webpage and Rest-Service for launching the coffee-editor on GKE
 
-## Deployment steps
+## Deploying a new Coffee Editor Image
 
 Setup kubectl to point to our cluster.
 
-`mvn clean verify -f java/pom.xml`
+Check out https://github.com/eclipsesource/coffee-editor, update the version accordingly and create a PR for the version update.
 
-`docker build --tag=coffee-editor-example .`
+Build the image `coffee-editor/dockerfiles/build.sh`
 
-`docker tag coffee-editor-example eu.gcr.io/kubernetes-238012/coffee-editor-example`
+Test the image locally by running `docker run -p 0.0.0.0:3000:3000 --rm coffee-editor`
 
-`docker push eu.gcr.io/kubernetes-238012/coffee-editor-example`
+Retag the image (adjust verson) `docker tag coffee-editor:latest eu.gcr.io/kubernetes-238012/coffee-editor:version`
 
-`cd coffee-editor-launcher-vue && docker build -t coffee-editor-vue . && cd ..`
+Push the image (adjust version) `docker push eu.gcr.io/kubernetes-238012/coffee-editor:version`
 
-`docker tag coffee-editor-vue:latest eu.gcr.io/kubernetes-238012/coffee-editor-vue`
+Run `kubectl edit configmap coffee-config -n coffee` and update `COFFEE_EDITOR` with the pushed tag.
 
-`docker push eu.gcr.io/kubernetes-238012/coffee-editor-vue`
-
-`kubectl create serviceaccount api-service-account`
-
-`kubectl create -f namespaces/coffee.json`
-
-`kubectl create -f namespaces/instance.json`
-
-`kubectl config set-context --current --namespace=coffee` or `kubectl config set-context --current --namespace=coffee-instance`
-
-`kubectl create configmap coffee-config --from-env-file=config/coffee-env-file.properties -n coffee`
-
-`kubectl apply -f k8s/`
-
-`kubectl get services -w` and wait for the IP of the service
-
-
-## Update docker image to use
-
-Edit Config map
-
+Rescale the deployment:
 `kubectl scale --replicas=0 deployment/coffee-editor-deployment -n coffee`
-
 `kubectl scale --replicas=1 deployment/coffee-editor-deployment -n coffee`
 
-Go to [http://coffee-editor-deployment-service-external-ip:9091/services/launch](URL)
+Test the deployment (first start is slower than usual, because the new image has to be pulled from the registry)
+
+## Deploy a new version of the REST Service
+
+Setup kubectl to point to our cluster.
+
+Build the rest service `mvn clean verify -f java/pom.xml`
+
+Build the docker image `docker build --tag=coffee-editor-example .`
+
+Retag image `docker tag coffee-editor-example eu.gcr.io/kubernetes-238012/coffee-editor-example`
+
+Push the image `docker push eu.gcr.io/kubernetes-238012/coffee-editor-example`
+
+Rescale the deployment:
+`kubectl scale --replicas=0 deployment/coffee-editor-deployment -n coffee`
+`kubectl scale --replicas=1 deployment/coffee-editor-deployment -n coffee`
+
+Test the deployment
+
+## Deploy a new version of the Launcher Web Page
+
+Setup kubectl to point to our cluster.
+
+Build docker image `cd coffee-editor-launcher-vue && docker build -t coffee-editor-vue . && cd ..`
+
+Retag the image `docker tag coffee-editor-vue:latest eu.gcr.io/kubernetes-238012/coffee-editor-vue`
+
+Push the image `docker push eu.gcr.io/kubernetes-238012/coffee-editor-vue`
+
+Rescale the web page deployment:
+`kubectl scale --replicas=0 deployment/coffee-editor-vue -n coffee`
+`kubectl scale --replicas=1 deployment/coffee-editor-vue -n coffee`
+
+## Initial steps (Only required when starting in a new cluster)
+
+Setup kubectl to point to our cluster.
+
+Service accounts used by the REST service to start new pods in the cluster `kubectl create serviceaccount api-service-account`
+
+Create the namespaces:
+`kubectl create -f namespaces/coffee.json`
+`kubectl create -f namespaces/instance.json`
+
+Create the initial config for the REST service `kubectl create configmap coffee-config --from-env-file=config/coffee-env-file.properties -n coffee`
+
+Create initial deployments `kubectl apply -f k8s/`
