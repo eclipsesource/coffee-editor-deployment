@@ -64,6 +64,7 @@ public class ExampleServer {
 	private static long ACTIVE_DEADLINE_SECONDS; // minutes until Theia is brought down
 	private static long CLEANUP_TIMEFRAME_HOURS; // timeframe for when to cleanup resources when this pod gets evicted
 	private static Boolean DEBUGGING;
+	private static Boolean PARALLEL_SPAWN;
 	private static int INGRESS_LIMIT;
 	private static int EGRESS_LIMIT;
 
@@ -137,6 +138,7 @@ public class ExampleServer {
 		ACTIVE_DEADLINE_SECONDS = getLongProperty("job.ttl.seconds", 30 * 60l);
 		CLEANUP_TIMEFRAME_HOURS = getLongProperty("cleanup.hours", 6);
 		DEBUGGING = getBooleanProperty("debugging", false);
+		PARALLEL_SPAWN = getBooleanProperty("parallel.spawn", false);
 		INGRESS_LIMIT = getIntProperty("ingress.limit", 4);
 		EGRESS_LIMIT = getIntProperty("egress.limit", 2);
 	}
@@ -147,8 +149,8 @@ public class ExampleServer {
 
 	private Map<String, AvailableService> servicesInUse = new ConcurrentHashMap<>();
 
-	private ExecutorService requestSpawner = Executors.newFixedThreadPool(1);
-	private ExecutorService serviceSpawner = Executors.newFixedThreadPool(10);
+	private final ExecutorService requestSpawner;
+	private final ExecutorService serviceSpawner;
 
 	private static class AvailableService {
 		String uuid;
@@ -171,6 +173,15 @@ public class ExampleServer {
 
 		private static final long serialVersionUID = -6425915796611641245L;
 
+	}
+
+	public ExampleServer() {
+		if (PARALLEL_SPAWN) {
+			requestSpawner = Executors.newFixedThreadPool(MAX_CONCURRENT_USERS);
+		} else {
+			requestSpawner = Executors.newFixedThreadPool(1);
+		}
+		serviceSpawner = Executors.newFixedThreadPool(MIN_AVAILABLE_SERVICES);
 	}
 
 	private synchronized int incSpawn(int minAvailableServices) {
@@ -218,13 +229,16 @@ public class ExampleServer {
 				response.resume(jaxrs);
 			}
 		});
-		// enqueue a wait between requests
-		requestSpawner.execute(() -> {
-			try {
-				Thread.sleep(5000);
-			} catch (InterruptedException e) {
-			}
-		});
+
+		if (!PARALLEL_SPAWN) {
+			// enqueue a wait between requests
+			requestSpawner.execute(() -> {
+				try {
+					Thread.sleep(5000);
+				} catch (InterruptedException e) {
+				}
+			});
+		}
 	}
 
 	private String doStartCoffeeEditorInstance() throws CoffeeLaunchException {
@@ -419,7 +433,7 @@ public class ExampleServer {
 
 	private void cleanUpWatch() {
 		try {
-			Thread.sleep(TimeUnit.MINUTES.toMillis(5));
+			Thread.sleep(TimeUnit.SECONDS.toMillis(ACTIVE_DEADLINE_SECONDS));
 		} catch (InterruptedException e) {
 		}
 
