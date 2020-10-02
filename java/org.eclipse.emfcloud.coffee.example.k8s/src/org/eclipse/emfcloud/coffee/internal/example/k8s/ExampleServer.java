@@ -37,6 +37,7 @@ import io.kubernetes.client.ApiException;
 import io.kubernetes.client.Configuration;
 import io.kubernetes.client.apis.BatchV1Api;
 import io.kubernetes.client.apis.CoreV1Api;
+import io.kubernetes.client.apis.ExtensionsV1beta1Api;
 import io.kubernetes.client.custom.IntOrString;
 import io.kubernetes.client.custom.Quantity;
 import io.kubernetes.client.models.V1EnvVar;
@@ -49,6 +50,8 @@ import io.kubernetes.client.models.V1PodStatus;
 import io.kubernetes.client.models.V1Service;
 import io.kubernetes.client.models.V1ServiceBuilder;
 import io.kubernetes.client.models.V1ServiceList;
+import io.kubernetes.client.models.V1beta1Ingress;
+import io.kubernetes.client.models.V1beta1IngressBuilder;
 import io.kubernetes.client.util.ClientBuilder;
 
 @Path("/launch")
@@ -154,11 +157,11 @@ public class ExampleServer {
 
 	private static class AvailableService {
 		String uuid;
-		String ip;
+		String hostName;
 
-		AvailableService(String uuid, String ip) {
+		AvailableService(String uuid, String hostName) {
 			this.uuid = uuid;
-			this.ip = ip;
+			this.hostName = hostName;
 		}
 
 		public String uuid() {
@@ -197,22 +200,27 @@ public class ExampleServer {
 		spawningServices -= 1;
 	}
 
-	private synchronized void addAvailableServiceAndDecSpawn(String uuid, String ip) {
-		availableServices.add(new AvailableService(uuid, ip));
+	private synchronized void addAvailableServiceAndDecSpawn(String uuid, String hostName) {
+		availableServices.add(new AvailableService(uuid, hostName));
 		spawningServiceNames.remove(createServiceName(uuid));
 		decSpawn();
 	}
 
 	@Activate
 	public void init() throws IOException, ApiException {
-		ApiClient client = ClientBuilder.cluster().build();
-		client.setDebugging(DEBUGGING);
-		Configuration.setDefaultApiClient(client);
+		try {
+			ApiClient client = ClientBuilder.cluster().build();
+			client.setDebugging(DEBUGGING);
+			Configuration.setDefaultApiClient(client);
 
-		spawnServices("init", MIN_AVAILABLE_SERVICES);
+			spawnServices("init", MIN_AVAILABLE_SERVICES);
 
-		startWatchingJobs();
-		startCleanupWatch();
+			startWatchingJobs();
+			startCleanupWatch();
+		} catch (ApiException e) {
+			System.err.println("API Exception: " + e.getResponseBody());
+			throw e;
+		}
 	}
 
 	@GET
@@ -279,9 +287,9 @@ public class ExampleServer {
 						"There was a problem with your request, please try again. If it continues to fail, please try again later");
 			}
 
-			waitForURL(requestUUID, "http://" + serviceDescription.ip + ":4000/");
+			waitForURL(requestUUID, "http://" + serviceDescription.hostName + "");
 
-			return "http://" + serviceDescription.ip + ":4000/#/coffee-editor/backend/examples/SuperBrewer3000";
+			return "http://" + serviceDescription.hostName + "/#/coffee-editor/backend/examples/SuperBrewer3000";
 		} catch (Exception e) {
 			if (e instanceof CoffeeLaunchException) {
 				throw (CoffeeLaunchException) e;
@@ -364,13 +372,14 @@ public class ExampleServer {
 			String uuid = UUID.randomUUID().toString();
 			long start = System.currentTimeMillis();
 			String serviceName = createService(uuid);
-			addToAvailableOnceReady(uuid, serviceName);
+			String hostName = createIngress(uuid, serviceName);
+			addToAvailableOnceReady(uuid, serviceName, hostName);
 			log(requestUUID, MessageFormat.format("Initiating spawning a service with uuid {0} took {1}ms", uuid,
 					(System.currentTimeMillis() - start)));
 		}
 	}
 
-	private void addToAvailableOnceReady(String uuid, String serviceName) {
+	private void addToAvailableOnceReady(String uuid, String serviceName, String hostName) {
 		serviceSpawner.execute(() -> {
 			try {
 				for (int i = 0; i < 3600; i++) {
@@ -383,18 +392,10 @@ public class ExampleServer {
 							null, null, null, null, null, null, Boolean.FALSE);
 					for (V1Service v1Service : listNamespacedService.getItems()) {
 						if (serviceName.equals(v1Service.getMetadata().getName())) {
-							if (v1Service.getStatus().getLoadBalancer() == null
-									|| v1Service.getStatus().getLoadBalancer().getIngress() == null) {
-								break;
-							}
-							String ip = v1Service.getStatus().getLoadBalancer().getIngress().get(0).getIp();
-							if (ip != null && !ip.isEmpty()) {
-								log("init", MessageFormat.format("Adding a new service. {0} are available",
-										availableServices.size() + 1));
-								addAvailableServiceAndDecSpawn(uuid, ip);
-								return;
-							}
-							break;
+							log("init", MessageFormat.format("Adding a new service. {0} are available",
+									availableServices.size() + 1));
+							addAvailableServiceAndDecSpawn(uuid, hostName);
+							return;
 						}
 					}
 				}
@@ -477,7 +478,7 @@ public class ExampleServer {
 
 					}
 				}
-				unknownServices.forEach(ExampleServer.this::deleteServiceWithName);
+				unknownServices.forEach(ExampleServer.this::deleteServiceAndIngressWithServiceName);
 			} catch (Exception e) {
 			}
 
@@ -518,7 +519,7 @@ public class ExampleServer {
 				for (String job : finishedJobs) {
 					AvailableService service = servicesInUse.remove(job);
 					if (service != null) {
-						deleteService(service.uuid());
+						deleteServiceAndIngress(service.uuid());
 					}
 					deleteJob(job);
 				}
@@ -537,11 +538,11 @@ public class ExampleServer {
 		}
 	}
 
-	private void deleteService(String uuid) {
-		deleteServiceWithName("coffee-editor-demo-service-" + uuid);
+	private void deleteServiceAndIngress(String uuid) {
+		deleteServiceAndIngressWithServiceName("coffee-editor-demo-service-" + uuid);
 	}
 
-	private void deleteServiceWithName(String name) {
+	private void deleteServiceAndIngressWithServiceName(String name) {
 		System.err.println("DELETING SERVICE WITH NAME " + name);
 		CoreV1Api coreV1Api = new CoreV1Api();
 		try {
@@ -549,10 +550,24 @@ public class ExampleServer {
 		} catch (ApiException e) {
 		} catch (Exception e) {
 		}
+
+		String ingressName = name.replace("coffee-editor-demo-service", "coffee-editor-demo-ingress");
+		System.err.println("DELETING INGRESS WITH NAME " + ingressName);
+		ExtensionsV1beta1Api api = new ExtensionsV1beta1Api();
+		try {
+			api.deleteNamespacedIngress(ingressName, NAMESPACE, null, null, null, null, null, null);
+		} catch (ApiException e) {
+		} catch (Exception e) {
+		}
 	}
 
 	private String createServiceName(String uuid) {
 		String name = "coffee-editor-demo-service-" + uuid;
+		return name;
+	}
+
+	private String createIngressName(String uuid) {
+		String name = "coffee-editor-demo-ingress-" + uuid;
 		return name;
 	}
 
@@ -574,9 +589,41 @@ public class ExampleServer {
 				/*    */.withTargetPort(new IntOrString(3000)).endPort()//
 				/**/.withSelector(Collections.singletonMap("app", "coffee-editor-" + uuid))//
 				/**/.withSessionAffinity("None")//
-				/**/.withType("LoadBalancer").endSpec().build();
+				/**/.withType("NodePort").endSpec().build();
 		coreV1Api.createNamespacedService(NAMESPACE, service, null, null, null);
 		return name;
+	}
+
+	private String createIngress(String uuid, String serviceName) throws ApiException {
+		String hostName = uuid + ".35.234.81.45.nip.io";// TODO retrieve ip automatically
+		ExtensionsV1beta1Api api = new ExtensionsV1beta1Api();
+		String name = createIngressName(uuid);
+		V1beta1Ingress ingress = new V1beta1IngressBuilder()//
+//				.withApiVersion("networking.k8s.io/v1beta1")//
+				.withNewMetadata()//
+				/**/.withName(name)//
+				/**/.withAnnotations(createIngressAnnotations(serviceName)).endMetadata()//
+				.withNewSpec()//
+				/**/.addNewRule()//
+				/*    */.withHost(hostName)//
+				/*    */.withNewHttp()//
+				/*        */.addNewPath()//
+				/*            */.withPath("/")//
+				/*            */.withNewBackend()//
+				/*                */.withServiceName(serviceName)
+				/*                */.withServicePort(new IntOrString(4000)).endBackend().endPath().endHttp().endRule()
+				.endSpec().build();
+		api.createNamespacedIngress(NAMESPACE, ingress, null, null, null);
+		return hostName;
+	}
+
+	private Map<String, String> createIngressAnnotations(String serviceName) {
+		Map<String, String> annotations = new LinkedHashMap<>();
+		annotations.put("kubernetes.io/ingress.class", "nginx");
+		annotations.put("nginx.ingress.kubernetes.io/proxy-connect-timeout", "3600");
+		annotations.put("nginx.ingress.kubernetes.io/proxy-read-timeout", "3600");
+		annotations.put("nginx.org/websocket-services", serviceName);
+		return annotations;
 	}
 
 	private String createJob(String requestUUID, String uuid) throws ApiException {
@@ -613,7 +660,7 @@ public class ExampleServer {
 				/*            */.withNewResources()//
 				/*                */.addToRequests("memory", Quantity.fromString("1.6G"))//
 				/*                */.addToLimits("memory", Quantity.fromString("1.6G"))
-				/*                */.addToRequests("cpu", Quantity.fromString("0.25")).endResources()//
+				/*                */.addToRequests("cpu", Quantity.fromString("0.19")).endResources()//
 				/*            */.addNewPort()//
 				/*                */.withContainerPort(3000).endPort().endContainer().endSpec().endTemplate().endSpec()
 				/*                */.build();
