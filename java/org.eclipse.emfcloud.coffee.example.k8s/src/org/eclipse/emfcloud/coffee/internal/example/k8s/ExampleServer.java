@@ -58,9 +58,11 @@ import io.kubernetes.client.util.ClientBuilder;
 @Component(name = "ExampleServer", service = ExampleServer.class, immediate = true)
 public class ExampleServer {
 
-	private static final String NAMESPACE = "coffee-instance";
 
-	private static String COFFEE_EDITOR_IMAGE_VERSION;
+	private static String NAMESPACE = "coffee-instance";
+	private static String IMAGE_REGISTRY; // Registry to get docker images from
+	private static String IMAGE_VERSION; // Docker image's version
+	private static String IMAGE_NAME; // Docker image to start as new instances
 	private static int MAX_CONCURRENT_USERS;
 	private static int MIN_AVAILABLE_SERVICES; // minimum available ips
 	private static long JOB_CLEANUP_TIMEFRAME_MINUTES; // timeframe for when to cleanup resources
@@ -70,6 +72,8 @@ public class ExampleServer {
 	private static Boolean PARALLEL_SPAWN;
 	private static int INGRESS_LIMIT;
 	private static int EGRESS_LIMIT;
+	private static String HOST; // The host address that this server runs on
+	private static String PREFIX; // prefix of created kubernetes objects (jobs, pods, services, and ingresses)
 
 	private static String getStringProperty(String key, String def) {
 		String property = System.getProperty(key);
@@ -134,7 +138,11 @@ public class ExampleServer {
 	}
 
 	static {
-		COFFEE_EDITOR_IMAGE_VERSION = getStringProperty("coffee.editor", "0.7.8");
+		// Get settings from environment variables
+		NAMESPACE= getStringProperty("namespace", "coffee-instance");
+		IMAGE_REGISTRY = getStringProperty("image.registry", "eu.gcr.io/kubernetes-238012/");
+		IMAGE_NAME = getStringProperty("image.name", "coffee-editor");
+		IMAGE_VERSION = getStringProperty("image.version", "0.7.0");
 		MAX_CONCURRENT_USERS = getIntProperty("max.concurrent.users", 10);
 		MIN_AVAILABLE_SERVICES = getIntProperty("min.available.services", 11);
 		JOB_CLEANUP_TIMEFRAME_MINUTES = getLongProperty("job.cleanup.minutes", 15l);
@@ -144,6 +152,8 @@ public class ExampleServer {
 		PARALLEL_SPAWN = getBooleanProperty("parallel.spawn", false);
 		INGRESS_LIMIT = getIntProperty("ingress.limit", 4);
 		EGRESS_LIMIT = getIntProperty("egress.limit", 2);
+		HOST = getStringProperty("host", "35.234.81.45.nip.io");
+		PREFIX = getStringProperty("prefix", "coffee-editor");
 	}
 
 	private Queue<AvailableService> availableServices = new LinkedBlockingQueue<>();
@@ -169,8 +179,8 @@ public class ExampleServer {
 		}
 	}
 
-	private static class CoffeeLaunchException extends Exception {
-		public CoffeeLaunchException(String msg) {
+	private static class InstanceLaunchException extends Exception {
+		public InstanceLaunchException(String msg) {
 			super(msg);
 		}
 
@@ -225,13 +235,13 @@ public class ExampleServer {
 
 	@GET
 	@Produces("text/plain")
-	public void startCoffeeEditorInstance(@Suspended final AsyncResponse response) throws IOException, ApiException {
+	public void startInstance(@Suspended final AsyncResponse response) throws IOException, ApiException {
 		requestSpawner.execute(() -> {
 			try {
-				String result = doStartCoffeeEditorInstance();
+				String result = doStartInstance();
 				Response jaxrs = Response.ok(result).type(MediaType.TEXT_PLAIN).build();
 				response.resume(jaxrs);
-			} catch (CoffeeLaunchException e) {
+			} catch (InstanceLaunchException e) {
 				Response.status(503).entity(e.getMessage()).build();
 				Response jaxrs = Response.status(503).entity(e.getMessage()).build();
 				response.resume(jaxrs);
@@ -249,7 +259,16 @@ public class ExampleServer {
 		}
 	}
 
-	private String doStartCoffeeEditorInstance() throws CoffeeLaunchException {
+	/**
+	 * Prefixes the given string with this server's {@code PREFIX} and a separator.
+	 * @param toPrefix
+	 * @return The prefixed string
+	 */
+	private static String withPrefix(String toPrefix) {
+		return String.format("%s-%s", PREFIX, toPrefix);
+	}
+
+	private String doStartInstance() throws InstanceLaunchException {
 		String requestUUID = UUID.randomUUID().toString();
 		try {
 			// TODO unit test this
@@ -265,7 +284,7 @@ public class ExampleServer {
 
 			if (servicesInUse.size() >= MAX_CONCURRENT_USERS) {
 				log(requestUUID, "Too many users");
-				throw new CoffeeLaunchException("Too many concurrent users at the moment. Please try again later.");
+				throw new InstanceLaunchException("Too many concurrent users at the moment. Please try again later.");
 			}
 
 			/*
@@ -283,7 +302,7 @@ public class ExampleServer {
 			servicesInUse.put(jobName, serviceDescription);
 
 			if (!waitForJobPod(requestUUID, jobName)) {
-				throw new CoffeeLaunchException(
+				throw new InstanceLaunchException(
 						"There was a problem with your request, please try again. If it continues to fail, please try again later");
 			}
 
@@ -291,13 +310,13 @@ public class ExampleServer {
 
 			return "http://" + serviceDescription.hostName + "/#/coffee-editor/backend/examples/SuperBrewer3000";
 		} catch (Exception e) {
-			if (e instanceof CoffeeLaunchException) {
-				throw (CoffeeLaunchException) e;
+			if (e instanceof InstanceLaunchException) {
+				throw (InstanceLaunchException) e;
 			}
 			log(requestUUID, "There was an exception:");
 			e.printStackTrace();
 
-			throw new CoffeeLaunchException(
+			throw new InstanceLaunchException(
 					"There was a problem with your request, please try again. If it continues to fail, please try again later");
 		}
 	}
@@ -464,8 +483,8 @@ public class ExampleServer {
 				V1JobList listNamespacedJob = batchV1Api.listNamespacedJob(NAMESPACE, Boolean.TRUE, null, null, null,
 						null, null, null, null, Boolean.FALSE);
 				for (V1Job v1Job : listNamespacedJob.getItems()) {
-					String serviceName = v1Job.getMetadata().getName().replace("coffee-editor-demo-job",
-							"coffee-editor-demo-service");
+					String serviceName = v1Job.getMetadata().getName().replace(withPrefix("demo-job"),
+							withPrefix("demo-service"));
 					if (unknownServices.contains(serviceName)) {
 						// job for unknown service. is this job still running?
 						if (v1Job.getStatus() != null) {
@@ -539,7 +558,7 @@ public class ExampleServer {
 	}
 
 	private void deleteServiceAndIngress(String uuid) {
-		deleteServiceAndIngressWithServiceName("coffee-editor-demo-service-" + uuid);
+		deleteServiceAndIngressWithServiceName(withPrefix("demo-service-" + uuid));
 	}
 
 	private void deleteServiceAndIngressWithServiceName(String name) {
@@ -551,7 +570,7 @@ public class ExampleServer {
 		} catch (Exception e) {
 		}
 
-		String ingressName = name.replace("coffee-editor-demo-service", "coffee-editor-demo-ingress");
+		String ingressName = name.replace(withPrefix("demo-service"), withPrefix("demo-ingress"));
 		System.err.println("DELETING INGRESS WITH NAME " + ingressName);
 		ExtensionsV1beta1Api api = new ExtensionsV1beta1Api();
 		try {
@@ -562,13 +581,11 @@ public class ExampleServer {
 	}
 
 	private String createServiceName(String uuid) {
-		String name = "coffee-editor-demo-service-" + uuid;
-		return name;
+		return withPrefix("demo-service-" + uuid);
 	}
 
 	private String createIngressName(String uuid) {
-		String name = "coffee-editor-demo-ingress-" + uuid;
-		return name;
+		return withPrefix("demo-ingress-" + uuid);
 	}
 
 	private String createService(String uuid) throws ApiException {
@@ -579,7 +596,7 @@ public class ExampleServer {
 				.withApiVersion("v1")//
 				.withNewMetadata()//
 				/**/.withName(name)//
-				/**/.withLabels(Collections.singletonMap("app", "coffee-editor-" + uuid))//
+				/**/.withLabels(Collections.singletonMap("app", withPrefix(uuid)))//
 				/**/.withNamespace(NAMESPACE).endMetadata()//
 				.withNewSpec()//
 				/**/.withExternalTrafficPolicy("Cluster")//
@@ -587,7 +604,7 @@ public class ExampleServer {
 				/*    */.withPort(4000)//
 				/*    */.withProtocol("TCP")//
 				/*    */.withTargetPort(new IntOrString(3000)).endPort()//
-				/**/.withSelector(Collections.singletonMap("app", "coffee-editor-" + uuid))//
+				/**/.withSelector(Collections.singletonMap("app", withPrefix(uuid)))//
 				/**/.withSessionAffinity("None")//
 				/**/.withType("NodePort").endSpec().build();
 		coreV1Api.createNamespacedService(NAMESPACE, service, null, null, null);
@@ -595,7 +612,7 @@ public class ExampleServer {
 	}
 
 	private String createIngress(String uuid, String serviceName) throws ApiException {
-		String hostName = uuid + ".35.234.81.45.nip.io";// TODO retrieve ip automatically
+		String hostName = uuid + "." + HOST;// TODO retrieve ip automatically
 		ExtensionsV1beta1Api api = new ExtensionsV1beta1Api();
 		String name = createIngressName(uuid);
 		V1beta1Ingress ingress = new V1beta1IngressBuilder()//
@@ -632,8 +649,8 @@ public class ExampleServer {
 		V1Job v1Job = new V1JobBuilder()//
 				.withApiVersion("batch/v1")//
 				.withNewMetadata()//
-				/**/.withName("coffee-editor-demo-job-" + uuid)//
-				/**/.withLabels(Collections.singletonMap("app", "coffee-editor-" + uuid))//
+				/**/.withName(withPrefix("demo-job-" + uuid))//
+				/**/.withLabels(Collections.singletonMap("app", withPrefix(uuid)))//
 				/**/.withNamespace(NAMESPACE).endMetadata()//
 				.withNewSpec()//
 				/**/.withBackoffLimit(1)//
@@ -641,22 +658,22 @@ public class ExampleServer {
 				/**/.withTtlSecondsAfterFinished(60)//
 				/**/.withNewTemplate()//
 				/*    */.withNewMetadata()//
-				/*        */.withLabels(Collections.singletonMap("app", "coffee-editor-" + uuid))
+				/*        */.withLabels(Collections.singletonMap("app", withPrefix(uuid)))
 				/*        */.withAnnotations(ingressBandwidthLimit(INGRESS_LIMIT + "M")).endMetadata()//
 				/*    */.withNewSpec()//
 				/*        */.withRestartPolicy("Never")//
 				/*        */.withAutomountServiceAccountToken(false)//
 				/*        */.addNewInitContainer()//
-				/*            */.withName("coffee-editor-demo-traffic-shaping")//
-				/*            */.withImage("eu.gcr.io/kubernetes-238012/tc-init:latest")//
+				/*            */.withName(withPrefix("demo-traffic-shaping"))//
+				/*            */.withImage(IMAGE_REGISTRY + "tc-init:latest")//
 				/*            */.withEnv(new V1EnvVar().name("EGRESS_BANDWIDTH").value(EGRESS_LIMIT + "mbit"))//
 				/*            */.withNewSecurityContext()//
 				/*                */.withRunAsUser(0l)//
 				/*                */.withNewCapabilities()//
 				/*                  */.withAdd("NET_ADMIN").endCapabilities().endSecurityContext().endInitContainer()//
 				/*        */.addNewContainer()//
-				/*            */.withName("coffee-editor-demo")//
-				/*            */.withImage("eu.gcr.io/kubernetes-238012/coffee-editor:" + COFFEE_EDITOR_IMAGE_VERSION)//
+				/*            */.withName(withPrefix("demo"))//
+				/*            */.withImage(IMAGE_REGISTRY + IMAGE_NAME + ":" + IMAGE_VERSION)//
 				/*            */.withNewResources()//
 				/*                */.addToRequests("memory", Quantity.fromString("1.6G"))//
 				/*                */.addToLimits("memory", Quantity.fromString("1.6G"))
@@ -667,7 +684,7 @@ public class ExampleServer {
 		batchV1Api.createNamespacedJob(NAMESPACE, v1Job, true, "true", null);
 		log(requestUUID, MessageFormat.format("Creating a job with UUID {0} took {1}ms", uuid,
 				(System.currentTimeMillis() - start)));
-		return "coffee-editor-demo-job-" + uuid;
+		return withPrefix("demo-job-" + uuid);
 	}
 
 	private Map<String, String> ingressBandwidthLimit(String ingress) {
