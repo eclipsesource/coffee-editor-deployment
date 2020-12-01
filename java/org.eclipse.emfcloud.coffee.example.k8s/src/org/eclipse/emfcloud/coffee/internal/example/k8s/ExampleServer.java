@@ -612,7 +612,7 @@ public class ExampleServer {
 	}
 
 	private String createIngress(String uuid, String serviceName) throws ApiException {
-		String hostName = uuid + "." + HOST;// TODO retrieve ip automatically
+		String hostName = uuid + "." + HOST;
 		ExtensionsV1beta1Api api = new ExtensionsV1beta1Api();
 		String name = createIngressName(uuid);
 		V1beta1Ingress ingress = new V1beta1IngressBuilder()//
