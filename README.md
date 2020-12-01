@@ -69,3 +69,12 @@ Create the namespaces:
 Create the initial config for the REST service `kubectl create configmap coffee-config --from-env-file=config/coffee-env-file.properties -n coffee`
 
 Create initial deployments `kubectl apply -f k8s/`
+
+# License
+
+This program and the accompanying materials are made available under the terms of the Eclipse Public License v. 2.0 which is available at http://www.eclipse.org/legal/epl-2.0.
+
+This Source Code may also be made available under the following Secondary Licenses when the conditions for such availability set forth in the Eclipse Public License v. 2.0 are satisfied: MIT.
+
+SPDX-License-Identifier: EPL-2.0 OR MIT
+
