@@ -58,7 +58,6 @@ import io.kubernetes.client.util.ClientBuilder;
 @Component(name = "ExampleServer", service = ExampleServer.class, immediate = true)
 public class ExampleServer {
 
-
 	private static String NAMESPACE = "coffee-instance";
 	private static String IMAGE_REGISTRY; // Registry to get docker images from
 	private static String IMAGE_VERSION; // Docker image's version
@@ -77,7 +76,7 @@ public class ExampleServer {
 
 	private static String getStringProperty(String key, String def) {
 		String property = System.getProperty(key);
-		if (property == null) {
+		if (property == null || property.isEmpty()) {
 			log("init", MessageFormat.format("No property for key {0} found. Using {1}", key, def));
 			return def;
 		}
@@ -87,7 +86,7 @@ public class ExampleServer {
 
 	private static int getIntProperty(String key, int def) {
 		String property = System.getProperty(key);
-		if (property == null) {
+		if (property == null || property.isEmpty()) {
 			log("init", MessageFormat.format("No property for key {0} found. Using {1}", key, def));
 			return def;
 		}
@@ -104,7 +103,7 @@ public class ExampleServer {
 
 	private static long getLongProperty(String key, long def) {
 		String property = System.getProperty(key);
-		if (property == null) {
+		if (property == null || property.isEmpty()) {
 			log("init", MessageFormat.format("No property for key {0} found. Using {1}", key, def));
 			return def;
 		}
@@ -121,7 +120,7 @@ public class ExampleServer {
 
 	private static boolean getBooleanProperty(String key, boolean def) {
 		String property = System.getProperty(key);
-		if (property == null) {
+		if (property == null || property.isEmpty()) {
 			log("init", MessageFormat.format("No property for key {0} found. Using {1}", key, def));
 			return def;
 		}
@@ -139,7 +138,7 @@ public class ExampleServer {
 
 	static {
 		// Get settings from environment variables
-		NAMESPACE= getStringProperty("namespace", "coffee-instance");
+		NAMESPACE = getStringProperty("namespace", "coffee-instance");
 		IMAGE_REGISTRY = getStringProperty("image.registry", "eu.gcr.io/kubernetes-238012/");
 		IMAGE_NAME = getStringProperty("image.name", "coffee-editor");
 		IMAGE_VERSION = getStringProperty("image.version", "0.7.0");
@@ -261,6 +260,7 @@ public class ExampleServer {
 
 	/**
 	 * Prefixes the given string with this server's {@code PREFIX} and a separator.
+	 * 
 	 * @param toPrefix
 	 * @return The prefixed string
 	 */
