@@ -61,6 +61,7 @@ public class ExampleServer {
 	private static String NAMESPACE = "coffee-instance";
 	private static String IMAGE_REGISTRY; // Registry to get docker images from
 	private static String IMAGE_VERSION; // Docker image's version
+	private static String PREVIEW_IMAGE_VERSION; // Docker image's version
 	private static String IMAGE_NAME; // Docker image to start as new instances
 	private static int MAX_CONCURRENT_USERS;
 	private static int MIN_AVAILABLE_SERVICES; // minimum available ips
@@ -142,6 +143,7 @@ public class ExampleServer {
 		IMAGE_REGISTRY = getStringProperty("image.registry", "eu.gcr.io/kubernetes-238012/");
 		IMAGE_NAME = getStringProperty("image.name", "coffee-editor");
 		IMAGE_VERSION = getStringProperty("image.version", "0.7.0");
+		PREVIEW_IMAGE_VERSION = getStringProperty("image.version.preview", "0.8.0");
 		MAX_CONCURRENT_USERS = getIntProperty("max.concurrent.users", 10);
 		MIN_AVAILABLE_SERVICES = getIntProperty("min.available.services", 11);
 		JOB_CLEANUP_TIMEFRAME_MINUTES = getLongProperty("job.cleanup.minutes", 15l);
@@ -235,9 +237,20 @@ public class ExampleServer {
 	@GET
 	@Produces("text/plain")
 	public void startInstance(@Suspended final AsyncResponse response) throws IOException, ApiException {
+		startInstance(response, IMAGE_VERSION);
+	}
+
+	@GET
+	@Path("/preview")
+	@Produces("text/plain")
+	public void startPreviewInstance(@Suspended final AsyncResponse response) throws IOException, ApiException {
+		startInstance(response, PREVIEW_IMAGE_VERSION);
+	}
+
+	private void startInstance(final AsyncResponse response, String imageVersion) {
 		requestSpawner.execute(() -> {
 			try {
-				String result = doStartInstance();
+				String result = doStartInstance(imageVersion);
 				Response jaxrs = Response.ok(result).type(MediaType.TEXT_PLAIN).build();
 				response.resume(jaxrs);
 			} catch (InstanceLaunchException e) {
@@ -268,7 +281,7 @@ public class ExampleServer {
 		return String.format("%s-%s", PREFIX, toPrefix);
 	}
 
-	private String doStartInstance() throws InstanceLaunchException {
+	private String doStartInstance(String imageVersion) throws InstanceLaunchException {
 		String requestUUID = UUID.randomUUID().toString();
 		try {
 			// TODO unit test this
@@ -297,7 +310,7 @@ public class ExampleServer {
 			AvailableService serviceDescription = getDedicatedService(requestUUID);
 
 			/* start up job */
-			String jobName = createJob(requestUUID, serviceDescription.uuid());
+			String jobName = createJob(requestUUID, serviceDescription.uuid(), imageVersion);
 
 			servicesInUse.put(jobName, serviceDescription);
 
@@ -643,7 +656,7 @@ public class ExampleServer {
 		return annotations;
 	}
 
-	private String createJob(String requestUUID, String uuid) throws ApiException {
+	private String createJob(String requestUUID, String uuid, String imageVersion) throws ApiException {
 		long start = System.currentTimeMillis();
 		BatchV1Api batchV1Api = new BatchV1Api();
 		V1Job v1Job = new V1JobBuilder()//
@@ -673,7 +686,7 @@ public class ExampleServer {
 				/*                  */.withAdd("NET_ADMIN").endCapabilities().endSecurityContext().endInitContainer()//
 				/*        */.addNewContainer()//
 				/*            */.withName(withPrefix("demo"))//
-				/*            */.withImage(IMAGE_REGISTRY + IMAGE_NAME + ":" + IMAGE_VERSION)//
+				/*            */.withImage(IMAGE_REGISTRY + IMAGE_NAME + ":" + imageVersion)//
 				/*            */.withNewResources()//
 				/*                */.addToRequests("memory", Quantity.fromString("1.6G"))//
 				/*                */.addToLimits("memory", Quantity.fromString("1.6G"))
